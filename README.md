@@ -25,6 +25,10 @@ Usage:
   work help              print usage
 ```
 
+### Shell wrapping
+
+You need to create a function in your shell that will `cd` based on `work`'s output.
+
 **Fish shell:**
 
 - Edit `work.fish` and replace the path to the `work` script.
