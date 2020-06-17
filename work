@@ -73,7 +73,7 @@ function handle_switch() {
   fi
   DIR=$(cut -d" " -f1 <<< "$SELECTION")
   if [[ -f "$CWD_PARENT/hook.sh" ]]; then
-    exec "$CWD_PARENT/hook.sh $DIR"
+    bash "$CWD_PARENT/hook.sh" "$DIR"
   fi
   echo "-> $DIR"
 }
@@ -88,7 +88,7 @@ function handle_new() {
   fi
   git worktree add "../$NAME"
   if [[ -f "$CWD_PARENT/hook.sh" ]]; then
-    exec "$CWD_PARENT/hook.sh $DIR"
+    bash "$CWD_PARENT/hook.sh" "$(readlink -f "../$NAME")"
   fi
   echo "-> $(readlink -f "../$NAME")"
 }
