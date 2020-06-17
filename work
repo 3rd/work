@@ -27,7 +27,7 @@ function cwd_is_git_repo() {
 function usage() {
   cat << HEREDOC
 Usage:
-  $PROGRAM_NAME switch		interactive switcher, prints tree path
+  $PROGRAM_NAME   		interactive switcher, prints tree path
   $PROGRAM_NAME i, init		prepare cwd for work
   $PROGRAM_NAME ls, list		list work trees
   $PROGRAM_NAME b, branch [name] switch current work tree to branch
@@ -66,13 +66,13 @@ function handle_list() {
 }
 
 function handle_switch() {
-  SELECTION=$(git worktree list | sed -r 's/^(.*\/([^[:space:]]*))/\1 \2/g' | fzf --with-nth=2,4 --height 10 --border --prompt "tree: ")
+  SELECTION=$(git worktree list | sed -r 's/^(.*\/([^[:space:]]* ))/\1 \2/g' | fzf --with-nth=2,4 --height 10 --border --prompt "tree: ")
   if [ -z "$SELECTION" ]; then
     exit 0
   fi
   DIR=$(cut -d" " -f1 <<< "$SELECTION")
   if [[ -f "$CWD_PARENT/hook.sh" ]]; then
-    exec "$CWD_PARENT/hook.sh"
+    exec "$CWD_PARENT/hook.sh $DIR"
   fi
   echo "-> $DIR"
 }

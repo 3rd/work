@@ -16,7 +16,7 @@ Extra dependencies:
 
 ```
 Usage:
-  work switch            interactive switcher, prints tree path
+  work                   interactive switcher, prints tree path
   work i, init           prepare cwd for work
   work ls, list          list work trees
   work b, branch [name]  switch current work tree to branch
