@@ -6,6 +6,7 @@ shopt -s dotglob nullglob
 
 PROGRAM_NAME=$(basename "$0")
 CWD=${PWD}
+CWD_PARENT=$(readlink -f "$CWD/..")
 CWD_NAME=${PWD##*/}
 
 function make_temp_dir() {
@@ -70,6 +71,9 @@ function handle_switch() {
     exit 0
   fi
   DIR=$(cut -d" " -f1 <<< "$SELECTION")
+  if [[ -f "$CWD_PARENT/hook.sh" ]]; then
+    exec "$CWD_PARENT/hook.sh"
+  fi
   echo "-> $DIR"
 }
 
