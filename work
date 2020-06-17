@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+set -u -o pipefail
+IFS=$'\n\t'
+
+shopt -s dotglob nullglob
+
+PROGRAM_NAME=$(basename "$0")
+CWD=${PWD}
+CWD_NAME=${PWD##*/}
+
+function make_temp_dir() {
+  mktemp -d -t work-XXXXXXXXXX
+}
+
+function trim() {
+  local var="$*"
+  var="${var#"${var%%[![:space:]]*}"}"
+  var="${var%"${var##*[![:space:]]}"}"
+  echo -n "$var"
+}
+
+function cwd_is_git_repo() {
+  [ -d "$CWD/.git" ] && git rev-parse --is-inside-work-tree > /dev/null 2>&1
+}
+
+function usage() {
+  cat << HEREDOC
+Usage:
+  $PROGRAM_NAME switch		interactive switcher, prints tree path
+  $PROGRAM_NAME i, init		prepare cwd for work
+  $PROGRAM_NAME ls, list		list work trees
+  $PROGRAM_NAME b, branch [name] switch current work tree to branch
+                        if name is provided, switch to branch or create it
+                        if name is not provided, select branch interactively
+  $PROGRAM_NAME help		print usage
+HEREDOC
+}
+
+function prepare() {
+  if [ ! "$(cwd_is_git_repo)" ] && [ -d "$CWD/main" ]; then
+    cd main || exit 1
+  fi
+  git worktree prune
+}
+
+function handle_init() {
+  if cwd_is_git_repo; then
+    if [ "$CWD_NAME" == "main" ]; then
+      echo "FATAL: cannot init in a directory called 'main'"
+      exit 1
+    fi
+    TMP=$(make_temp_dir)
+    mv ./* "$TMP"
+    mkdir main
+    mv "$TMP"/* main
+    cd main || exit 1
+  else
+    echo "FATAL: not in a git repository's root directory"
+    exit 1
+  fi
+}
+
+function handle_list() {
+  git worktree list
+}
+
+function handle_switch() {
+  SELECTION=$(git worktree list | sed -r 's/^(.*\/([^[:space:]]*))/\1 \2/g' | fzf --with-nth=2,4 --height 10 --border --prompt "tree: ")
+  if [ -z "$SELECTION" ]; then
+    exit 0
+  fi
+  DIR=$(cut -d" " -f1 <<< "$SELECTION")
+  echo "-> $DIR"
+}
+
+function handle_new() {
+  shift
+  NAME=${1:-}
+  if [ -z "$NAME" ]; then
+    echo "FATAL: you need to provide a tree name"
+    usage
+    exit 1
+  fi
+  git worktree add "../$NAME"
+  echo "-> $(readlink -f "../$NAME")"
+}
+
+function handle_branch() {
+  shift
+  BRANCH=${1:-}
+  if [ -z "$BRANCH" ]; then
+    BRANCH=$(trim "$(git branch --all --sort=-committerdate | rg -v "^\*" | sed "s/remotes\/origin\///g" | awk '!x[$0]++' | grep -v HEAD | fzf)")
+    if [ -z "$BRANCH" ]; then
+      exit 0
+    else
+      if [[ $BRANCH == +* ]]; then
+        echo "FATAL: branch is already checkout on a different work tree"
+        exit 1
+      fi
+      git checkout "$BRANCH"
+    fi
+  else
+    if [ "$(git branch --list "$BRANCH")" ]; then
+      git checkout "$BRANCH"
+    else
+      git checkout -b "$BRANCH"
+    fi
+  fi
+}
+
+function route_command() {
+  COMMAND=${1:-}
+  case "$COMMAND" in
+    "")
+      handle_switch
+      exit
+      ;;
+    i | init)
+      handle_init
+      exit
+      ;;
+    ls | list)
+      handle_list
+      exit
+      ;;
+    new)
+      handle_new "$@"
+      exit
+      ;;
+    b | branch)
+      handle_branch "$@"
+      exit
+      ;;
+    help | --help | -h | *) usage ;;
+  esac
+}
+
+prepare
+route_command "$@"
