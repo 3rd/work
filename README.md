@@ -19,6 +19,7 @@ Usage:
   work                   interactive switcher, prints tree path
   work i, init           prepare cwd for work
   work ls, list          list work trees
+  work new <name>        create new work tree and switch to it
   work b, branch [name]  switch current work tree to branch
                          if name is provided, switch to branch or create it
                          if name is not provided, select branch interactively

@@ -29,6 +29,7 @@ function usage() {
 Usage:
   $PROGRAM_NAME   		interactive switcher, prints tree path
   $PROGRAM_NAME i, init		prepare cwd for work
+  $PROGRAM_NAME new <name>       create new work tree and switch to it
   $PROGRAM_NAME ls, list		list work trees
   $PROGRAM_NAME b, branch [name] switch current work tree to branch
                         if name is provided, switch to branch or create it
