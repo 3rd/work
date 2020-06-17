@@ -86,6 +86,9 @@ function handle_new() {
     exit 1
   fi
   git worktree add "../$NAME"
+  if [[ -f "$CWD_PARENT/hook.sh" ]]; then
+    exec "$CWD_PARENT/hook.sh $DIR"
+  fi
   echo "-> $(readlink -f "../$NAME")"
 }
 
