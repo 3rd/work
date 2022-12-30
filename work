@@ -21,19 +21,20 @@ function trim() {
 }
 
 function cwd_is_git_repo() {
-  [ -d "$CWD/.git" ] && git rev-parse --is-inside-work-tree > /dev/null 2>&1
+  [ -d "$CWD/.git" ] && git rev-parse --is-inside-work-tree >/dev/null 2>&1
 }
 
 function usage() {
-  cat << HEREDOC
+  cat <<HEREDOC
 Usage:
   $PROGRAM_NAME   		interactive switcher, prints tree path
-  $PROGRAM_NAME i, init		prepare cwd for work
+  $PROGRAM_NAME i, init		setup "work" in cwd
   $PROGRAM_NAME new <name>       create new work tree and switch to it
+  $PROGRAM_NAME remove <name>    remove work tree
   $PROGRAM_NAME ls, list		list work trees
   $PROGRAM_NAME b, branch [name] switch current work tree to branch
-                        if name is provided, switch to branch or create it
-                        if name is not provided, select branch interactively
+                        if [name] is provided, switch to branch or create it
+                        if [name] is not provided, select branch interactively
   $PROGRAM_NAME help		print usage
 HEREDOC
 }
@@ -68,10 +69,10 @@ function handle_list() {
 
 function handle_switch() {
   SELECTION=$(git worktree list | sed -r 's/^(.*\/([^[:space:]]* ))/\1 \2/g' | fzf --with-nth=2,4 --height 10 --border --prompt "tree: ")
-  if [ -z "$SELECTION" ]; then
+  if [ "$SELECTION" = "" ]; then
     exit 0
   fi
-  DIR=$(cut -d" " -f1 <<< "$SELECTION")
+  DIR=$(cut -d" " -f1 <<<"$SELECTION")
   if [[ -f "$CWD_PARENT/hook.sh" ]]; then
     bash "$CWD_PARENT/hook.sh" "$DIR"
   fi
@@ -81,12 +82,14 @@ function handle_switch() {
 function handle_new() {
   shift
   NAME=${1:-}
-  if [ -z "$NAME" ]; then
+  if [ "$NAME" = "" ]; then
     echo "FATAL: you need to provide a tree name"
     usage
     exit 1
   fi
-  git worktree add "../$NAME"
+  CURRENT_BRANCH=$(git branch --show-current)
+  git worktree add "../$NAME" "$CURRENT_BRANCH" --detach
+  git checkout --ignore-other-worktrees "$CURRENT_BRANCH"
   if [[ -f "$CWD_PARENT/hook.sh" ]]; then
     bash "$CWD_PARENT/hook.sh" "$(readlink -f "../$NAME")"
   fi
@@ -96,24 +99,35 @@ function handle_new() {
 function handle_branch() {
   shift
   BRANCH=${1:-}
-  if [ -z "$BRANCH" ]; then
+  if [ "$BRANCH" = "" ]; then
     BRANCH=$(trim "$(git branch --all --sort=-committerdate | rg -v "^\*" | sed "s/remotes\/origin\///g" | awk '!x[$0]++' | grep -v HEAD | fzf)")
-    if [ -z "$BRANCH" ]; then
+    if [ "$BRANCH" = "" ]; then
       exit 0
     else
-      if [[ $BRANCH == +* ]]; then
-        echo "FATAL: branch is already checkout on a different work tree"
-        exit 1
-      fi
-      git checkout "$BRANCH"
+      # if [[ $BRANCH == +* ]]; then
+      #   echo "FATAL: branch is already checkout on a different work tree"
+      #   exit 1
+      # fi
+      git checkout --ignore-other-worktrees "$BRANCH"
     fi
   else
     if [ "$(git branch --list "$BRANCH")" ]; then
-      git checkout "$BRANCH"
+      git checkout --ignore-other-worktrees "$BRANCH"
     else
-      git checkout -b "$BRANCH"
+      git checkout --ignore-other-worktrees -b "$BRANCH"
     fi
   fi
+}
+
+function handle_remove() {
+  shift
+  NAME=${1:-}
+  if [ "$NAME" = "" ]; then
+    echo "FATAL: you need to provide a tree name"
+    usage
+    exit 1
+  fi
+  git worktree remove "$NAME"
 }
 
 function route_command() {
@@ -137,6 +151,10 @@ function route_command() {
       ;;
     b | branch)
       handle_branch "$@"
+      exit
+      ;;
+    remove)
+      handle_remove "$@"
       exit
       ;;
     help | --help | -h | *) usage ;;
