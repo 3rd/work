@@ -1,11 +1,12 @@
 function work
-	begin
-		set -l IFS
-		set output (path/to/work/script $argv);
+	set -l lines (/home/rabbit/brain/core/git-work/work $argv)
+	set -l work_status $status
+	for line in $lines
+		if string match -q -- '-> *' $line
+			cd (string sub --start 4 -- $line)
+		else
+			echo $line
+		end
 	end
-	switch $output
-		case "*-> *"
-	   cd (echo $output | rg "\->" | sed "s/-> //g")
-	end
-	echo $output | rg -v "\->"
+	return $work_status
 end

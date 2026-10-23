@@ -6,19 +6,7 @@ shopt -s dotglob nullglob
 
 PROGRAM_NAME=$(basename "$0")
 CWD=${PWD}
-CWD_PARENT=$(readlink -f "$CWD/..")
 CWD_NAME=${PWD##*/}
-
-function make_temp_dir() {
-  mktemp -d -t work-XXXXXXXXXX
-}
-
-function trim() {
-  local var="$*"
-  var="${var#"${var%%[![:space:]]*}"}"
-  var="${var%"${var##*[![:space:]]}"}"
-  echo -n "$var"
-}
 
 function cwd_is_git_repo() {
   [ -d "$CWD/.git" ] && git rev-parse --is-inside-work-tree >/dev/null 2>&1
@@ -27,55 +15,159 @@ function cwd_is_git_repo() {
 function usage() {
   cat <<HEREDOC
 Usage:
-  $PROGRAM_NAME   		interactive switcher, prints tree path
-  $PROGRAM_NAME i, init		setup "work" in cwd
-  $PROGRAM_NAME new <name>       create new work tree and switch to it
-  $PROGRAM_NAME remove <name>    remove work tree
-  $PROGRAM_NAME ls, list		list work trees
-  $PROGRAM_NAME b, branch [name] switch current work tree to branch
-                        if [name] is provided, switch to branch or create it
-                        if [name] is not provided, select branch interactively
-  $PROGRAM_NAME help		print usage
+  $PROGRAM_NAME                   interactive switcher, prints tree path
+  $PROGRAM_NAME i, init           setup "work" in cwd
+  $PROGRAM_NAME new <name>        create new work tree and switch to it
+  $PROGRAM_NAME rm, remove <name> remove work tree
+  $PROGRAM_NAME ls, list          list work trees
+  $PROGRAM_NAME b, branch [name]  switch current work tree to branch
+                         if [name] is provided, switch to branch or create it
+                         if [name] is not provided, select branch interactively
+  $PROGRAM_NAME help              print usage
+  $PROGRAM_NAME <command>         run a command of the work hook
 HEREDOC
 }
 
-function prepare() {
-  if [ ! "$(cwd_is_git_repo)" ] && [ -d "$CWD/main" ]; then
-    cd main || exit 1
+function is_in_repository() {
+  [ -e "$CWD/main/.git" ] || git rev-parse --git-dir >/dev/null 2>&1
+}
+
+function enter_repository() {
+  if [ -d "$CWD/main" ] && [ -e "$CWD/main/.git" ] && [ ! -e "$CWD/.git" ]; then
+    cd "$CWD/main" || exit 1
   fi
+
+  MAIN_TREE=$(git worktree list --porcelain | sed -n '1s/^worktree //p')
+  if [ "$MAIN_TREE" = "" ]; then
+    exit 1
+  fi
+
+  WORK_DIR=$(resolve_work_dir)
+  HOOK=$(resolve_hook)
+  if [ "$HOOK" != "" ] && [ ! -x "$HOOK" ]; then
+    echo "FATAL: the work hook is not executable, run chmod +x on it: $HOOK" >&2
+    exit 1
+  fi
+
+  export WORK_MAIN_TREE="$MAIN_TREE" WORK_TREES_DIR="$WORK_DIR"
   git worktree prune
 }
 
-function handle_init() {
-  if cwd_is_git_repo; then
-    if [ "$CWD_NAME" == "main" ]; then
-      echo "FATAL: cannot init in a directory called 'main'"
-      exit 1
-    fi
-    TMP=$(make_temp_dir)
-    mv ./* "$TMP"
-    mkdir main
-    mv "$TMP"/* main
-    cd main || exit 1
+function resolve_setting_path() {
+  local configured
+  configured=$(git config --type=path --get "$1")
+  if [ "$configured" = "" ] || [[ "$configured" == /* ]]; then
+    echo "$configured"
   else
+    realpath -m "$MAIN_TREE/$configured"
+  fi
+}
+
+function resolve_hook() {
+  local configured
+  configured=$(resolve_setting_path work.hook)
+  if [ "$configured" != "" ]; then
+    echo "$configured"
+  elif [ -f "$(dirname "$MAIN_TREE")/hook.sh" ]; then
+    echo "$(dirname "$MAIN_TREE")/hook.sh"
+  fi
+}
+
+function resolve_work_dir() {
+  local configured
+  configured=$(resolve_setting_path work.dir)
+  if [ "$configured" = "" ]; then
+    dirname "$MAIN_TREE"
+  else
+    echo "$configured"
+  fi
+}
+
+function run_hook() {
+  if [ "$HOOK" = "" ]; then
+    return 0
+  fi
+  "$HOOK" "$@" >&2
+}
+
+function describe_tree() {
+  if [ "$HOOK" = "" ]; then
+    return 0
+  fi
+  "$HOOK" describe "$1" </dev/null 2>/dev/null | head -n 1
+}
+
+function find_tree() {
+  local wanted
+  local path
+  wanted=$(realpath -m "$1")
+  while IFS= read -r path; do
+    if [ "$path" = "$wanted" ] || [ "$path" = "$WORK_DIR/$1" ] || [ "${path##*/}" = "$1" ]; then
+      echo "$path"
+      return 0
+    fi
+  done < <(git worktree list --porcelain | sed -n 's/^worktree //p')
+}
+
+function handle_init() {
+  if ! cwd_is_git_repo; then
     echo "FATAL: not in a git repository's root directory"
     exit 1
   fi
+
+  if [ "$CWD_NAME" == "main" ]; then
+    echo "FATAL: cannot init in a directory called 'main'"
+    exit 1
+  fi
+
+  ENTRIES=("$CWD"/*)
+  STAGING_DIR=$(mktemp -d "$CWD/.work-init-XXXXXXXXXX") || exit 1
+  if ! mv -- "${ENTRIES[@]}" "$STAGING_DIR"; then
+    echo "FATAL: could not move the repository into $STAGING_DIR, move its contents back"
+    exit 1
+  fi
+
+  mv -- "$STAGING_DIR" "$CWD/main" || exit 1
+  git -C "$CWD/main" worktree repair >&2
+  echo "-> $CWD/main"
 }
 
 function handle_list() {
-  git worktree list
+  local lines
+  local paths
+  local index
+  local description
+  mapfile -t lines < <(git worktree list)
+  mapfile -t paths < <(git worktree list --porcelain | sed -n 's/^worktree //p')
+  for index in "${!lines[@]}"; do
+    description=$(describe_tree "${paths[$index]}")
+    echo "${lines[$index]}${description:+  $description}"
+  done
+}
+
+function list_switch_choices() {
+  local path
+  local label
+  local description
+  git worktree list --porcelain | awk '
+    /^worktree / { path = substr($0, 10); count = split(path, parts, "/"); label = "" }
+    /^branch / { label = " [" substr($0, 19) "]" }
+    /^detached$/ { label = " (detached HEAD)" }
+    /^$/ { print path "\t" parts[count] label }
+  ' | while IFS=$'\t' read -r path label; do
+    description=$(describe_tree "$path")
+    printf '%s\t%s%s\n' "$path" "$label" "${description:+  $description}"
+  done
 }
 
 function handle_switch() {
-  SELECTION=$(git worktree list | sed -r 's/^(.*\/([^[:space:]]* ))/\1 \2/g' | fzf --with-nth=2,4 --height 10 --border --prompt "tree: ")
+  SELECTION=$(list_switch_choices | fzf --delimiter=$'\t' --with-nth=2 --height 10 --border --prompt "tree: ")
   if [ "$SELECTION" = "" ]; then
     exit 0
   fi
-  DIR=$(cut -d" " -f1 <<<"$SELECTION")
-  if [[ -f "$CWD_PARENT/hook.sh" ]]; then
-    bash "$CWD_PARENT/hook.sh" "$DIR"
-  fi
+
+  DIR=$(cut -f1 <<<"$SELECTION")
+  run_hook switch "$DIR"
   echo "-> $DIR"
 }
 
@@ -87,31 +179,29 @@ function handle_new() {
     usage
     exit 1
   fi
-  CURRENT_BRANCH=$(git branch --show-current)
-  git worktree add "../$NAME" "$CURRENT_BRANCH" --detach
-  git checkout --ignore-other-worktrees "$CURRENT_BRANCH"
-  if [[ -f "$CWD_PARENT/hook.sh" ]]; then
-    bash "$CWD_PARENT/hook.sh" "$(readlink -f "../$NAME")"
+
+  TREE_DIR="$WORK_DIR/$NAME"
+  git worktree add --detach "$TREE_DIR" HEAD >&2 || exit 1
+  if ! run_hook new "$TREE_DIR"; then
+    git worktree remove --force "$TREE_DIR" >&2
+    echo "FATAL: the work hook could not set up $NAME, so it was removed again" >&2
+    exit 1
   fi
-  echo "-> $(readlink -f "../$NAME")"
+  echo "-> $TREE_DIR"
 }
 
 function handle_branch() {
   shift
   BRANCH=${1:-}
   if [ "$BRANCH" = "" ]; then
-    BRANCH=$(trim "$(git branch --all --sort=-committerdate | rg -v "^\*" | sed "s/remotes\/origin\///g" | awk '!x[$0]++' | grep -v HEAD | fzf)")
+    BRANCH=$(git branch --all --sort=-committerdate | grep -v '^\*' | sed -e 's/^[+ ] //' -e 's#^remotes/origin/##' | grep -v ' -> ' | awk '!x[$0]++' | fzf)
     if [ "$BRANCH" = "" ]; then
       exit 0
     else
-      # if [[ $BRANCH == +* ]]; then
-      #   echo "FATAL: branch is already checkout on a different work tree"
-      #   exit 1
-      # fi
       git checkout --ignore-other-worktrees "$BRANCH"
     fi
   else
-    if [ "$(git branch --list "$BRANCH")" ]; then
+    if git show-ref --verify --quiet "refs/heads/$BRANCH" || git show-ref --verify --quiet "refs/remotes/origin/$BRANCH"; then
       git checkout --ignore-other-worktrees "$BRANCH"
     else
       git checkout --ignore-other-worktrees -b "$BRANCH"
@@ -127,13 +217,67 @@ function handle_remove() {
     usage
     exit 1
   fi
-  git worktree remove "$NAME"
+
+  TREE_PATH=$(find_tree "$NAME")
+  if [ "$TREE_PATH" = "" ]; then
+    echo "FATAL: no work tree named $NAME"
+    exit 1
+  fi
+
+  if ! run_hook remove "$TREE_PATH"; then
+    echo "FATAL: the work hook refused to remove $NAME" >&2
+    exit 1
+  fi
+
+  CURRENT_TREE=$(git rev-parse --show-toplevel)
+  cd "$MAIN_TREE" || exit 1
+  git worktree remove "$TREE_PATH" || exit 1
+  run_hook removed "$TREE_PATH" || echo "WARNING: the work hook failed to clean up after removing $NAME" >&2
+  if [ ! -d "$CURRENT_TREE" ]; then
+    echo "-> $MAIN_TREE"
+  fi
+}
+
+function handle_hook_command() {
+  local status
+  local target
+
+  if ! is_in_repository; then
+    usage
+    exit 1
+  fi
+
+  enter_repository
+  if [ "$HOOK" = "" ]; then
+    usage
+    exit 1
+  fi
+
+  WORK_CD_FILE=$(mktemp -t work-cd-XXXXXXXXXX) || exit 1
+  trap 'rm -f -- "$WORK_CD_FILE"' EXIT
+  export WORK_CD_FILE
+  (cd "$CWD" && "$HOOK" "$@") >&2
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    exit "$status"
+  fi
+
+  target=$(head -n 1 "$WORK_CD_FILE")
+  if [ "$target" = "" ]; then
+    return 0
+  fi
+
+  target=$(cd "$CWD" && realpath -m -- "$target")
+  if [ -d "$target" ]; then
+    echo "-> $target"
+  fi
 }
 
 function route_command() {
   COMMAND=${1:-}
   case "$COMMAND" in
     "")
+      enter_repository
       handle_switch
       exit
       ;;
@@ -142,24 +286,40 @@ function route_command() {
       exit
       ;;
     ls | list)
+      enter_repository
       handle_list
       exit
       ;;
     new)
+      enter_repository
       handle_new "$@"
       exit
       ;;
     b | branch)
+      enter_repository
       handle_branch "$@"
       exit
       ;;
-    remove)
+    rm | remove)
+      enter_repository
       handle_remove "$@"
       exit
       ;;
-    help | --help | -h | *) usage ;;
+    help | --help | -h)
+      usage
+      if is_in_repository; then
+        enter_repository
+        if [ "$HOOK" != "" ]; then
+          printf '\nCommands of the work hook (%s):\n' "$HOOK"
+          (cd "$CWD" && "$HOOK" help)
+        fi
+      fi
+      ;;
+    *)
+      handle_hook_command "$@"
+      exit
+      ;;
   esac
 }
 
-prepare
 route_command "$@"
